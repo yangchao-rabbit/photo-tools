@@ -1,0 +1,38 @@
+html,
+body,
+#root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+/* 默认主题颜色 */
+:root {
+    --layout-sidebar-bg: #ffffff;
+    --layout-sidebar-text: #ffffff;
+    --layout-sidebar-active-bg: #e6f4ff;
+    --layout-sidebar-active-text: #1677ff;
+    --layout-sidebar-hover-bg: rgba(0, 0, 0, 0.06);
+
+    --layout-main-bg: #f5f7fa;
+    --layout-main-text: #333333;
+
+    --el-card-bg: #ffffff;
+    --el-card-text: #303133;
+}
+
+.dark {
+    --layout-sidebar-bg: #001529;
+    --layout-sidebar-text: rgba(255, 255, 255, 0.65);
+    --layout-sidebar-active-bg: #1677ff;
+    --layout-sidebar-active-text: #fff;
+    --layout-sidebar-hover-bg: #fff;
+
+    --layout-main-bg: #181a23;
+    --layout-main-text: #e4e7eb;
+
+    --el-card-bg: #1e1e1e;
+    --el-card-text: #f0f0f0;
+}
