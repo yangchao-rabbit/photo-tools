@@ -32,7 +32,7 @@ const App: React.FC = () => {
             icon: <GithubOutlined className="menu-item-icon" />,
             label: 'GitHub',
             onClick: () => {
-                BrowserOpenURL('https://github.com/your-repo/photo-copier')
+                BrowserOpenURL('https://github.com/yangchao-rabbit/photo-tools')
             },
         },
         {
