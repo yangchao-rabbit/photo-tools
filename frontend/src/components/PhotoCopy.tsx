@@ -1,32 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import {
-    Typography,
-    Button,
-    Card,
-    Progress,
-    Form,
-    Input,
-    Checkbox,
-    Select,
-    Space,
-    Alert,
-    List,
-    message,
-    Switch,
-    Row,
-    Col,
-    DatePicker,
-    Flex,
-    Divider,
-} from 'antd'
+import { Typography, Button, Card, Progress, Form, Select, Space, Alert, List, message, Switch, Row, Col, InputNumber } from 'antd'
 import { FolderOpenOutlined, CopyOutlined, SettingOutlined, CheckCircleOutlined, CloseCircleOutlined, ScanOutlined } from '@ant-design/icons'
-import { Dayjs } from 'dayjs'
-import dayjs from 'dayjs'
-
-// 样式
-const photoCopyStyle = {
-    margin: '16px',
-}
+import { backend } from 'wjs/go/models'
+import { SelectDir, ScanImageFiles, CopyPhotos } from 'wjs/go/backend/FileCopier'
 
 const cardStyle = {
     marginBottom: '16px',
@@ -34,17 +10,6 @@ const cardStyle = {
 
 const { Text } = Typography
 const { Option } = Select
-const { RangePicker } = DatePicker
-
-// 临时类型定义，等待Wails生成
-interface CopyOptions {
-    sourceDir: string
-    targetDir: string
-    fileExtensions: string[]
-    maxFileSize: number
-    maxFileCount: number
-    preserveStructure: boolean
-}
 
 interface CopyResult {
     successCount: number
@@ -57,12 +22,6 @@ interface CopyState {
     isCopying: boolean
     progress: any | null
     result: CopyResult | null
-}
-
-// 临时函数定义，等待Wails生成
-const SelectDir = async (): Promise<string> => {
-    // TODO: 实现目录选择
-    return '临时路径'
 }
 
 const GetSupportedExtensions = async (): Promise<string[]> => {
@@ -89,34 +48,34 @@ const GetSupportedExtensions = async (): Promise<string[]> => {
     ]
 }
 
-const ScanImageFiles = async (sourceDir: string): Promise<string[]> => {
-    // TODO: 实现文件扫描
-    return []
-}
-
-const CopyPhotos = async (options: CopyOptions): Promise<CopyResult> => {
-    // TODO: 实现照片拷贝
-    return {
-        successCount: 0,
-        errorCount: 0,
-        errors: [],
-        totalSize: 0,
-    }
-}
-
 const PhotoCopy: React.FC = () => {
     const [sourceDir, setSourceDir] = useState<string>('')
     const [targetDir, setTargetDir] = useState<string>('')
     const [supportedExtensions, setSupportedExtensions] = useState<string[]>([])
     const [selectedExtensions, setSelectedExtensions] = useState<string[]>([])
-    const [copyOptions, setCopyOptions] = useState<CopyOptions>({
+    const [copyOptions, setCopyOptions] = useState<backend.CopyOptions>({
         sourceDir: '',
         targetDir: '',
         fileExtensions: [],
-        maxFileSize: 0,
-        maxFileCount: 0,
-        preserveStructure: false,
+        createDateBasedDir: false,
+        useFileDate: false,
+        groupByFormat: true,
+        dateGranularity: 'month',
+        overwrite: false,
+        dryRun: false,
+        maxDepth: 5,
+        copyMetadata: true,
+        generateHash: false,
+        ignoreHidden: true,
+        recursive: true,
     })
+    const [scanOptions, setScanOptions] = useState<backend.ScanOptions>({
+        sourceDir: '',
+        fileExtensions: [],
+        ignoreHidden: true,
+        recursive: true,
+    })
+
     const [copyState, setCopyState] = useState<CopyState>({
         isCopying: false,
         progress: null,
@@ -125,13 +84,17 @@ const PhotoCopy: React.FC = () => {
     const [scannedFiles, setScannedFiles] = useState<string[]>([])
 
     // 照片拷贝高级选项
+    const [createDateBasedDir, setCreateDateBasedDir] = useState<boolean>(false)
+    const [useFileDate, setUseFileDate] = useState<boolean>(false)
+    const [groupByFormat, setGroupByFormat] = useState<boolean>(true)
+    const [dateGranularity, setDateGranularity] = useState<string>('month')
+    const [overwrite, setOverwrite] = useState<boolean>(false)
+    const [dryRun, setDryRun] = useState<boolean>(false)
+    const [maxDepth, setMaxDepth] = useState<number>(5)
     const [copyMetadata, setCopyMetadata] = useState<boolean>(true)
-    const [splitByFormat, setSplitByFormat] = useState<boolean>(false)
-    const [createNewDir, setCreateNewDir] = useState<boolean>(false)
-    const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null)
-    const [organizeByMonth, setOrganizeByMonth] = useState<boolean>(false)
-    const [organizeByYear, setOrganizeByYear] = useState<boolean>(false)
-    const [preserveStructure, setPreserveStructure] = useState<boolean>(false)
+    const [generateHash, setGenerateHash] = useState<boolean>(false)
+    const [ignoreHidden, setIgnoreHidden] = useState<boolean>(true)
+    const [recursive, setRecursive] = useState<boolean>(true)
 
     // 初始化支持的扩展名
     useEffect(() => {
@@ -168,7 +131,13 @@ const PhotoCopy: React.FC = () => {
         }
 
         try {
-            const files = await ScanImageFiles(sourceDir)
+            setScanOptions({
+                sourceDir: sourceDir,
+                fileExtensions: selectedExtensions,
+                ignoreHidden: ignoreHidden,
+                recursive: recursive,
+            })
+            const files = await ScanImageFiles(scanOptions)
             setScannedFiles(files)
             message.success(`扫描完成，找到 ${files.length} 个图片文件`)
         } catch (error) {
@@ -195,11 +164,22 @@ const PhotoCopy: React.FC = () => {
         })
 
         try {
-            const options: CopyOptions = {
+            const options: backend.CopyOptions = {
                 ...copyOptions,
                 sourceDir: sourceDir,
                 targetDir: targetDir,
                 fileExtensions: selectedExtensions,
+                createDateBasedDir: createDateBasedDir,
+                useFileDate: useFileDate,
+                groupByFormat: groupByFormat,
+                dateGranularity: dateGranularity,
+                overwrite: overwrite,
+                dryRun: dryRun,
+                maxDepth: maxDepth,
+                copyMetadata: copyMetadata,
+                generateHash: generateHash,
+                ignoreHidden: ignoreHidden,
+                recursive: recursive,
             }
 
             console.log('Starting copy with options:', options)
@@ -244,14 +224,6 @@ const PhotoCopy: React.FC = () => {
             progress: null,
             result: null,
         })
-    }
-
-    const formatFileSize = (bytes: number) => {
-        if (bytes === 0) return '0 B'
-        const k = 1024
-        const sizes = ['B', 'KB', 'MB', 'GB']
-        const i = Math.floor(Math.log(bytes) / Math.log(k))
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
     }
 
     return (
@@ -299,61 +271,70 @@ const PhotoCopy: React.FC = () => {
                     {/* 目录组织选项 */}
                     <Card title="📂 目录组织" style={cardStyle}>
                         <Form layout="vertical">
+                            <Form.Item label="创建日期目录">
+                                <Switch checked={createDateBasedDir} onChange={setCreateDateBasedDir} checkedChildren="是" unCheckedChildren="否" />
+                                <Text type="secondary" style={{ marginLeft: 8 }}>
+                                    根据当前日期创建子目录
+                                </Text>
+                            </Form.Item>
+
                             <Form.Item label="按格式分别创建目录">
-                                <Switch checked={splitByFormat} onChange={setSplitByFormat} checkedChildren="是" unCheckedChildren="否" />
+                                <Switch checked={groupByFormat} onChange={setGroupByFormat} checkedChildren="是" unCheckedChildren="否" />
                                 <Text type="secondary" style={{ marginLeft: 8 }}>
                                     将不同格式的文件分别存储到对应目录
                                 </Text>
                             </Form.Item>
 
-                            <Form.Item label="按月份组织">
-                                <Switch checked={organizeByMonth} onChange={setOrganizeByMonth} checkedChildren="是" unCheckedChildren="否" />
+                            <Form.Item label="日期粒度">
+                                <Select value={dateGranularity} onChange={setDateGranularity} style={{ width: '100%' }}>
+                                    <Option value="month">按月份</Option>
+                                    <Option value="year">按年份</Option>
+                                </Select>
                                 <Text type="secondary" style={{ marginLeft: 8 }}>
-                                    根据文件修改时间按月份创建子目录
+                                    按日期粒度创建子目录，如果创建日期目录为是，则根据日期粒度创建子目录
                                 </Text>
                             </Form.Item>
 
-                            <Form.Item label="按年份组织">
-                                <Switch checked={organizeByYear} onChange={setOrganizeByYear} checkedChildren="是" unCheckedChildren="否" />
+                            <Form.Item label="使用文件修改日期">
+                                <Switch checked={useFileDate} onChange={setUseFileDate} checkedChildren="是" unCheckedChildren="否" />
                                 <Text type="secondary" style={{ marginLeft: 8 }}>
-                                    根据文件修改时间按年份创建子目录
+                                    根据文件修改时间创建子目录
                                 </Text>
                             </Form.Item>
 
-                            <Form.Item label="保持原始目录结构">
-                                <Switch checked={preserveStructure} onChange={setPreserveStructure} checkedChildren="是" unCheckedChildren="否" />
+                            <Form.Item label="覆盖目标文件">
+                                <Switch checked={overwrite} onChange={setOverwrite} checkedChildren="是" unCheckedChildren="否" />
                                 <Text type="secondary" style={{ marginLeft: 8 }}>
-                                    在目标目录中保持源目录的文件夹结构
+                                    覆盖目标文件
                                 </Text>
                             </Form.Item>
 
-                            <Form.Item label="创建新目录">
-                                <Switch checked={createNewDir} onChange={setCreateNewDir} checkedChildren="是" unCheckedChildren="否" />
+                            <Form.Item label="最大深度">
+                                <InputNumber value={maxDepth} onChange={(value) => setMaxDepth(value || 5)} style={{ width: '100%' }} />
                                 <Text type="secondary" style={{ marginLeft: 8 }}>
-                                    在目标目录下创建新的子目录
+                                    最大深度
                                 </Text>
                             </Form.Item>
-                        </Form>
-                    </Card>
 
-                    {/* 时间过滤 */}
-                    <Card title="⏰ 时间过滤" style={cardStyle}>
-                        <Form layout="vertical">
-                            <Form.Item label="时间区间过滤">
-                                <RangePicker
-                                    value={dateRange}
-                                    onChange={(dates) => {
-                                        if (dates && dates[0] && dates[1]) {
-                                            setDateRange([dates[0], dates[1]])
-                                        } else {
-                                            setDateRange(null)
-                                        }
-                                    }}
-                                    showTime
-                                    placeholder={['开始时间', '结束时间']}
-                                    style={{ width: '100%' }}
-                                />
-                                <Text type="secondary">只拷贝指定时间范围内的文件</Text>
+                            <Form.Item label="拷贝元数据">
+                                <Switch checked={copyMetadata} onChange={setCopyMetadata} checkedChildren="是" unCheckedChildren="否" />
+                                <Text type="secondary" style={{ marginLeft: 8 }}>
+                                    保留EXIF等元数据信息
+                                </Text>
+                            </Form.Item>
+
+                            <Form.Item label="忽略隐藏文件">
+                                <Switch checked={ignoreHidden} onChange={setIgnoreHidden} checkedChildren="是" unCheckedChildren="否" />
+                                <Text type="secondary" style={{ marginLeft: 8 }}>
+                                    忽略隐藏文件
+                                </Text>
+                            </Form.Item>
+
+                            <Form.Item label="递归扫描">
+                                <Switch checked={recursive} onChange={setRecursive} checkedChildren="是" unCheckedChildren="否" />
+                                <Text type="secondary" style={{ marginLeft: 8 }}>
+                                    递归扫描子目录
+                                </Text>
                             </Form.Item>
                         </Form>
                     </Card>
@@ -379,6 +360,12 @@ const PhotoCopy: React.FC = () => {
                                 </Select>
                                 <Text type="secondary">选择需要拷贝的图片文件格式</Text>
                             </Form.Item>
+                            <Form.Item label="测试模式">
+                                <Switch checked={dryRun} onChange={setDryRun} checkedChildren="是" unCheckedChildren="否" />
+                                <Text type="secondary" style={{ marginLeft: 8 }}>
+                                    测试模式
+                                </Text>
+                            </Form.Item>
 
                             <Form.Item label="拷贝元数据">
                                 <Switch checked={copyMetadata} onChange={setCopyMetadata} checkedChildren="是" unCheckedChildren="否" />
@@ -387,35 +374,11 @@ const PhotoCopy: React.FC = () => {
                                 </Text>
                             </Form.Item>
 
-                            <Form.Item label="文件大小限制（MB）">
-                                <Input
-                                    type="number"
-                                    placeholder="0 表示无限制"
-                                    value={copyOptions.maxFileSize ? copyOptions.maxFileSize / (1024 * 1024) : ''}
-                                    onChange={(e) =>
-                                        setCopyOptions((prev) => ({
-                                            ...prev,
-                                            maxFileSize: parseInt(e.target.value) * 1024 * 1024 || 0,
-                                        }))
-                                    }
-                                    suffix="MB"
-                                />
-                                <Text type="secondary">只拷贝小于指定大小的文件</Text>
-                            </Form.Item>
-
-                            <Form.Item label="文件数量限制">
-                                <Input
-                                    type="number"
-                                    placeholder="0 表示无限制"
-                                    value={copyOptions.maxFileCount || ''}
-                                    onChange={(e) =>
-                                        setCopyOptions((prev) => ({
-                                            ...prev,
-                                            maxFileCount: parseInt(e.target.value) || 0,
-                                        }))
-                                    }
-                                />
-                                <Text type="secondary">限制拷贝的文件总数</Text>
+                            <Form.Item label="生成图片hash值">
+                                <Switch checked={generateHash} onChange={setGenerateHash} checkedChildren="是" unCheckedChildren="否" />
+                                <Text type="secondary" style={{ marginLeft: 8 }}>
+                                    生成图片hash值
+                                </Text>
                             </Form.Item>
                         </Form>
                     </Card>
@@ -471,7 +434,7 @@ const PhotoCopy: React.FC = () => {
                                                 <CloseCircleOutlined style={{ color: '#ff4d4f' }} />
                                                 失败: {copyState.result.errorCount} 个文件
                                             </p>
-                                            <p>总大小: {formatFileSize(copyState.result.totalSize)}</p>
+                                            <p>总大小: {copyState.result.totalSize}</p>
                                             {copyState.result.errors.length > 0 && (
                                                 <div>
                                                     <Text strong>错误详情:</Text>

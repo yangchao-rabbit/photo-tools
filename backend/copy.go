@@ -98,12 +98,12 @@ func (f *FileCopier) isImageFile(ext string, supportedExts map[string]struct{}) 
 }
 
 type ScanOptions struct {
-	SourceDir      string
-	FileExtensions []string
+	SourceDir      string   `json:"sourceDir"`
+	FileExtensions []string `json:"fileExtensions"`
 	// 忽略隐藏文件和文件夹
-	IgnoreHidden bool
+	IgnoreHidden bool `json:"ignoreHidden"`
 	// 是否递归扫描子目录
-	Recursive bool
+	Recursive bool `json:"recursive"`
 }
 
 // 扫描目录中的特定的文件
