@@ -7,7 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	sysruntime "runtime"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -17,12 +20,37 @@ type FileCopier struct {
 }
 
 type CopyOptions struct {
-	SourceDir         string   `json:"sourceDir"`
-	TargetDir         string   `json:"targetDir"`
-	FileExtensions    []string `json:"fileExtensions"`
-	MaxFileSize       int64    `json:"maxFileSize"` // 字节
-	MaxFileCount      int      `json:"maxFileCount"`
-	PreserveStructure bool     `json:"preserveStructure"`
+	SourceDir      string   `json:"sourceDir"`
+	TargetDir      string   `json:"targetDir"`
+	FileExtensions []string `json:"fileExtensions"`
+
+	// 是否创建日期目录 (默认根据当前月份创建目录)
+	CreateDateBasedDir bool `json:"createDateBasedDir"`
+	// 基于当前日期或文件修改日期
+	UseFileDate bool `json:"useFileDate"`
+
+	// 是否基于格式创建子目录 (默认根据格式创建子目录)
+	GroupByFormat bool `json:"groupByFormat"`
+	// 日期粒度 (默认月)
+	DateGranularity string `json:"dateGranularity"`
+
+	// 是否覆盖目标文件 (默认覆盖)
+	Overwrite bool `json:"overwrite"`
+	// 是否为测试模式
+	DryRun bool `json:"dryRun"`
+
+	// 最大深度 (默认5层)
+	MaxDepth int `json:"maxDepth"`
+
+	// 是否拷贝元数据 (默认拷贝)
+	CopyMetadata bool `json:"copyMetadata"`
+
+	// 生成图片hash值
+	GenerateHash bool `json:"generateHash"`
+
+	// 扫描选项
+	IgnoreHidden bool `json:"ignoreHidden"`
+	Recursive    bool `json:"recursive"`
 }
 
 type CopyProgress struct {
@@ -62,38 +90,57 @@ func (f *FileCopier) SelectDir() string {
 	return dir
 }
 
-// 获取支持的图片文件扩展名
-func (f *FileCopier) GetSupportedExtensions() []string {
-	return []string{
-		".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif",
-		".webp", ".svg", ".ico", ".heic", ".heif", ".raw", ".cr2",
-		".nef", ".arw", ".dng", ".orf", ".rw2",
-	}
-}
-
 // 检查文件是否为图片
-func (f *FileCopier) isImageFile(filename string) bool {
-	ext := strings.ToLower(filepath.Ext(filename))
-	supportedExts := f.GetSupportedExtensions()
-
-	for _, supportedExt := range supportedExts {
-		if ext == supportedExt {
-			return true
-		}
-	}
-	return false
+func (f *FileCopier) isImageFile(ext string, supportedExts map[string]struct{}) bool {
+	ext = strings.ToLower(filepath.Ext(ext))
+	_, exists := supportedExts[ext]
+	return exists
 }
 
-// 扫描目录中的图片文件
-func (f *FileCopier) ScanImageFiles(sourceDir string) ([]string, error) {
+type ScanOptions struct {
+	SourceDir      string
+	FileExtensions []string
+	// 忽略隐藏文件和文件夹
+	IgnoreHidden bool
+	// 是否递归扫描子目录
+	Recursive bool
+}
+
+// 扫描目录中的特定的文件
+func (f *FileCopier) ScanImageFiles(options *ScanOptions) ([]string, error) {
 	var imageFiles []string
 
-	err := filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+	// 将后缀表转为 map 提升性能
+	supportedExts := make(map[string]struct{}, len(options.FileExtensions))
+	for _, ext := range options.FileExtensions {
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		supportedExts[strings.ToLower(ext)] = struct{}{}
+	}
+
+	err := filepath.Walk(options.SourceDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if !info.IsDir() && f.isImageFile(path) {
+		name := info.Name()
+
+		// 忽略隐藏文件/文件夹
+		if options.IgnoreHidden && strings.HasPrefix(name, ".") {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// 如果不递归则跳过目录
+		if info.IsDir() && !options.Recursive && path != options.SourceDir {
+			return filepath.SkipDir
+		}
+
+		// 文件判断
+		if !info.IsDir() && f.isImageFile(path, supportedExts) {
 			imageFiles = append(imageFiles, path)
 		}
 
@@ -104,119 +151,161 @@ func (f *FileCopier) ScanImageFiles(sourceDir string) ([]string, error) {
 }
 
 // 拷贝文件
-func (f *FileCopier) copyFile(src, dst string) error {
+func (f *FileCopier) copyFile(src, dst string, options *CopyOptions) error {
+	if options.DryRun {
+		fmt.Printf("拷贝文件: %s -> %s\n", src, dst)
+		return nil
+	}
+
+	if !options.Overwrite {
+		if _, err := os.Stat(dst); err == nil {
+			return fmt.Errorf("目标文件已存在")
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+
 	sourceFile, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer sourceFile.Close()
 
-	// 确保目标目录存在
-	dstDir := filepath.Dir(dst)
-	if err := os.MkdirAll(dstDir, 0755); err != nil {
-		return err
-	}
-
-	destFile, err := os.Create(dst)
+	dstFile, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer destFile.Close()
 
-	_, err = io.Copy(destFile, sourceFile)
-	return err
+	if _, err := io.Copy(dstFile, sourceFile); err != nil {
+		return err
+	}
+
+	if options.CopyMetadata {
+		info, err := os.Stat(src)
+		if err == nil {
+			_ = os.Chtimes(dst, info.ModTime(), info.ModTime())
+		}
+	}
+
+	return nil
+}
+
+func (f *FileCopier) calcTargetPath(src string, options *CopyOptions) (string, error) {
+	ext := filepath.Ext(src)
+	base := filepath.Base(src)
+
+	subDir := ""
+
+	// 如果 CreateDateBasedDir 为 true, 则根据 DateGranularity 创建子目录
+	if options.CreateDateBasedDir {
+		date := time.Now()
+		if options.UseFileDate {
+			info, err := os.Stat(src)
+			if err == nil {
+				date = info.ModTime()
+			}
+		}
+
+		switch options.DateGranularity {
+		case "year":
+			subDir = date.Format("2006")
+		case "month":
+			subDir = date.Format("2006-01")
+		}
+	}
+
+	// 如果 GroupByFormat 为 true, 则根据文件扩展名创建子目录
+	if options.GroupByFormat {
+		subDir = filepath.Join(subDir, strings.TrimPrefix(ext, "."))
+	}
+
+	dst := filepath.Join(options.TargetDir, subDir, base)
+
+	return dst, nil
+}
+
+type CopyFileTask struct {
+	SrcFile string
+	DstFile string
 }
 
 // 执行照片拷贝
-func (f *FileCopier) CopyPhotos(options CopyOptions) CopyResult {
-	result := CopyResult{}
-
+// 添加拷贝文件缓存, 实现前端进度条
+func (f *FileCopier) CopyPhotos(options *CopyOptions) error {
 	// 扫描源目录中的图片文件
-	imageFiles, err := f.ScanImageFiles(options.SourceDir)
+	imageFiles, err := f.ScanImageFiles(&ScanOptions{
+		SourceDir:      options.SourceDir,
+		FileExtensions: options.FileExtensions,
+		IgnoreHidden:   options.IgnoreHidden,
+		Recursive:      options.Recursive,
+	})
 	if err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("扫描目录失败: %v", err))
-		return result
+		return fmt.Errorf("扫描目录失败: %v", err)
 	}
 
-	// 应用文件扩展名过滤
-	if len(options.FileExtensions) > 0 {
-		filteredFiles := []string{}
-		for _, file := range imageFiles {
-			ext := strings.ToLower(filepath.Ext(file))
-			for _, allowedExt := range options.FileExtensions {
-				if ext == allowedExt {
-					filteredFiles = append(filteredFiles, file)
-					break
+	total := len(imageFiles)
+	if total == 0 {
+		return fmt.Errorf("未找到符合条件的图片文件")
+	}
+
+	tasks := make(chan CopyFileTask, total)
+	status := make(chan string)
+
+	// worker
+	workerCount := sysruntime.NumCPU()
+	var wg sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for task := range tasks {
+				if err := f.copyFile(task.SrcFile, task.DstFile, options); err != nil {
+					status <- fmt.Sprintf("拷贝失败 %s: %v", filepath.Base(task.SrcFile), err)
+				} else {
+					status <- fmt.Sprintf("拷贝成功 %s", filepath.Base(task.SrcFile))
 				}
 			}
-		}
-		imageFiles = filteredFiles
+		}()
 	}
 
-	// 应用文件大小限制
-	if options.MaxFileSize > 0 {
-		filteredFiles := []string{}
-		for _, file := range imageFiles {
-			if info, err := os.Stat(file); err == nil && info.Size() <= options.MaxFileSize {
-				filteredFiles = append(filteredFiles, file)
+	// 启动任务
+	go func() {
+		completed := 0
+		for msg := range status {
+			completed++
+			progress := map[string]interface{}{
+				"total":     total,
+				"completed": completed,
+				"message":   msg,
 			}
+			runtime.EventsEmit(f.ctx, "copy:progress", progress)
 		}
-		imageFiles = filteredFiles
+	}()
+
+	// 构造任务
+	for _, src := range imageFiles {
+		dst, err := f.calcTargetPath(src, options)
+		if err != nil {
+			status <- fmt.Sprintf("拷贝失败 %s: %v", filepath.Base(src), err)
+			continue
+		}
+		tasks <- CopyFileTask{
+			SrcFile: src,
+			DstFile: dst,
+		}
 	}
 
-	// 应用文件数量限制
-	if options.MaxFileCount > 0 && len(imageFiles) > options.MaxFileCount {
-		imageFiles = imageFiles[:options.MaxFileCount]
-	}
+	close(tasks)
+	wg.Wait()
+	close(status)
 
-	totalCount := len(imageFiles)
-
-	for i, srcFile := range imageFiles {
-		// 计算目标路径
-		var dstFile string
-		if options.PreserveStructure {
-			// 保持目录结构
-			relPath, _ := filepath.Rel(options.SourceDir, srcFile)
-			dstFile = filepath.Join(options.TargetDir, relPath)
-		} else {
-			// 直接拷贝到目标目录
-			filename := filepath.Base(srcFile)
-			dstFile = filepath.Join(options.TargetDir, filename)
-		}
-
-		// 发送进度更新
-		progress := CopyProgress{
-			CurrentFile:    filepath.Base(srcFile),
-			ProcessedCount: i + 1,
-			TotalCount:     totalCount,
-			Progress:       float64(i+1) / float64(totalCount) * 100,
-			Status:         "拷贝中...",
-		}
-		runtime.EventsEmit(f.ctx, "copy-progress", progress)
-
-		// 执行拷贝
-		if err := f.copyFile(srcFile, dstFile); err != nil {
-			result.ErrorCount++
-			result.Errors = append(result.Errors, fmt.Sprintf("拷贝失败 %s: %v", filepath.Base(srcFile), err))
-		} else {
-			result.SuccessCount++
-			if info, err := os.Stat(srcFile); err == nil {
-				result.TotalSize += info.Size()
-			}
-		}
-
-		// 添加小延迟避免UI阻塞
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	// 发送完成进度
-	runtime.EventsEmit(f.ctx, "copy-progress", CopyProgress{
-		CurrentFile:    "",
-		ProcessedCount: totalCount,
-		TotalCount:     totalCount,
-		Progress:       100,
-		Status:         "完成",
+	runtime.EventsEmit(f.ctx, "copy:progress", map[string]interface{}{
+		"total":     total,
+		"completed": total,
+		"message":   "完成",
 	})
 
-	return result
+	return nil
 }
